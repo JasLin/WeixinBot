@@ -119,6 +119,7 @@ class WebWeixin(object):
         opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(self.cookie))
         opener.addheaders = [('User-agent', self.user_agent)]
         urllib2.install_opener(opener)
+        logging.basicConfig(filename='logger.log') 
 
     def loadConfig(self, config):
         if config['DEBUG']:
@@ -341,6 +342,7 @@ class WebWeixin(object):
         url = 'https://' + self.syncHost + \
             '/cgi-bin/mmwebwx-bin/synccheck?' + urllib.urlencode(params)
         data = self._get(url)
+        print 'result = ' + data
         pm = re.search(
             r'window.synccheck={retcode:"(\d+)",selector:"(\d+)"}', data)
         retcode = pm.group(1)
@@ -618,6 +620,64 @@ class WebWeixin(object):
                 return member['UserName']
         return None
 
+    # 处理禅谷的群里面的表情签到消息
+    def _processZenGroupMessage(self, message, name, url):
+        oneHours = 'MGViabGqwnZfqvxoCaSgpMFTDNibiaKfQcZECJrCSiaAeWltVpnmCF2ic1g'
+        twoHours = 'N2HNP63ej1sc2Zv2MDDbSzAqJhiaDHp1OlhdObxWmibr0oUNoVzCKoWw'
+        fourHours = 'b7l8G6gJwvHMENM81lTX8TWHxaTUx7F8fpPnZYaibn2GVHJ1jCsRSNA'
+        longTime = 'pNpibzvjKLaENicgUM1eSE5KvRBBudMp5vPvP5Z5ZzFr4giaibdR3PrVsA'
+        timeFlag = None
+        needProcessGroupName = '水月禅谷同见同行群'
+        # needProcessGroupName = '水月管理员工作群'
+ 
+        srcName = None
+        dstName = None
+        groupName = None
+        content = None
+
+
+        msg = message
+        logging.debug(msg)
+
+        if msg['raw_msg']:
+            srcName = self.getUserRemarkName(msg['raw_msg']['FromUserName'])
+            dstName = self.getUserRemarkName(msg['raw_msg']['ToUserName'])
+            content = msg['raw_msg']['Content'].replace(
+                '&lt;', '<').replace('&gt;', '>')
+            message_id = msg['raw_msg']['MsgId']
+            if msg['raw_msg']['FromUserName'][:2] == '@@':
+
+                # 接收到来自群的消息
+                if re.search(":<br/>", content, re.IGNORECASE):
+                    [people, content] = content.split(':<br/>')
+                    groupName = srcName
+                    srcName = self.getUserRemarkName(people)
+                    dstName = 'GROUP'
+                else:
+                    groupName = srcName
+                    srcName = 'SYSTEM'
+            elif msg['raw_msg']['ToUserName'][:2] == '@@':
+                # 自己发给群的消息
+                groupName = dstName
+                dstName = 'GROUP'
+
+        # 只处理禅谷的群
+        if groupName != None and groupName == needProcessGroupName:
+            if url.find(oneHours) > 0:
+                timeFlag = '1'
+            elif url.find(twoHours) > 0:
+                timeFlag = '2'
+            elif url.find(fourHours) > 0:
+                timeFlag = '4'
+            elif url.find(longTime) > 0:
+                timeFlag = '共修'
+            else: 
+                timeFlag = None
+
+        if timeFlag != None:
+            print '上座记录|%s|%s|%s' % (message_id,  srcName.strip(), timeFlag)
+            logging.info('上座记录|%s|%s|%s' % (message_id, srcName.strip(), timeFlag))
+
     def _showMsg(self, message):
 
         srcName = None
@@ -741,6 +801,7 @@ class WebWeixin(object):
                 url = self._searchContent('cdnurl', content)
                 raw_msg = {'raw_msg': msg,
                            'message': '%s 发了一个动画表情，点击下面链接查看: %s' % (name, url)}
+                self._processZenGroupMessage(raw_msg, name, url)
                 self._showMsg(raw_msg)
                 self._safe_open(url)
             elif msgType == 49:
@@ -1076,6 +1137,8 @@ if sys.stdout.encoding == 'cp936':
 
 if __name__ == '__main__':
 
+    FORMAT = "%(asctime)s|%(message)s"
+    logging.basicConfig(filename='./logger.log',format=FORMAT) 
     logger = logging.getLogger(__name__)
     import coloredlogs
     coloredlogs.install(level='DEBUG')
