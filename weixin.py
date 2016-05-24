@@ -343,6 +343,7 @@ class WebWeixin(object):
             '/cgi-bin/mmwebwx-bin/synccheck?' + urllib.urlencode(params)
         data = self._get(url)
         print 'result = ' + data
+        logging.debug('result = ' + data)
         pm = re.search(
             r'window.synccheck={retcode:"(\d+)",selector:"(\d+)"}', data)
         retcode = pm.group(1)
@@ -604,11 +605,15 @@ class WebWeixin(object):
                 if member['UserName'] == id:
                     name = member['RemarkName'] if member[
                         'RemarkName'] else member['NickName']
+                    print 'Name in Contact: remarkName = ' + member['RemarkName'] + ', NickName = '+member['NickName'] 
+                    logging.debug('Name in Contact: remarkName = ' + member['RemarkName'] + ', NickName = '+member['NickName']) 
             # 群友
             for member in self.GroupMemeberList:
                 if member['UserName'] == id:
                     name = member['DisplayName'] if member[
                         'DisplayName'] else member['NickName']
+                    print 'Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName'] 
+                    logging.debug('Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName']) 
 
         if name == '未知群' or name == '陌生人':
             logging.debug(id)
@@ -620,6 +625,25 @@ class WebWeixin(object):
                 return member['UserName']
         return None
 
+    def _getUserNameInGroup(self, id):
+        name = '未知群' if id[:2] == '@@' else '陌生人'
+
+        if id[:2] == '@@':
+            # 群
+            name = self.getGroupName(id)
+        else:
+            # 群友
+            for member in self.GroupMemeberList:
+                if member['UserName'] == id:
+                    name = member['DisplayName'] if member[
+                        'DisplayName'] else member['NickName']
+                    print 'Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName'] 
+                    logging.debug('Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName']) 
+
+        if name == '未知群' or name == '陌生人':
+            logging.debug(id)
+        return name
+
     # 处理禅谷的群里面的表情签到消息
     def _processZenGroupMessage(self, message, name, url):
         oneHours = 'MGViabGqwnZfqvxoCaSgpMFTDNibiaKfQcZECJrCSiaAeWltVpnmCF2ic1g'
@@ -629,12 +653,12 @@ class WebWeixin(object):
         timeFlag = None
         needProcessGroupName = '水月禅谷同见同行群'
         # needProcessGroupName = '水月管理员工作群'
+        #  needProcessGroupName = '测试群'
  
         srcName = None
         dstName = None
         groupName = None
         content = None
-
 
         msg = message
         logging.debug(msg)
@@ -651,15 +675,17 @@ class WebWeixin(object):
                 if re.search(":<br/>", content, re.IGNORECASE):
                     [people, content] = content.split(':<br/>')
                     groupName = srcName
-                    srcName = self.getUserRemarkName(people)
-                    dstName = 'GROUP'
+                    srcName = self._getUserNameInGroup(people)
                 else:
                     groupName = srcName
                     srcName = 'SYSTEM'
+                    print '消息里面提取不了群友id'
+                    logging.debug('消息里面提取不了群友id')
             elif msg['raw_msg']['ToUserName'][:2] == '@@':
                 # 自己发给群的消息
                 groupName = dstName
-                dstName = 'GROUP'
+                # 获取群里面的昵称
+                srcName = self._getUserNameInGroup(msg['raw_msg']['FromUserName'])
 
         # 只处理禅谷的群
         if groupName != None and groupName == needProcessGroupName:
@@ -675,8 +701,8 @@ class WebWeixin(object):
                 timeFlag = None
 
         if timeFlag != None:
-            print '上座记录|%s|%s|%s' % (message_id,  srcName.strip(), timeFlag)
-            logging.info('上座记录|%s|%s|%s' % (message_id, srcName.strip(), timeFlag))
+            print 'shangzhuo|上座记录|%s|%s|%s' % (message_id,  srcName.strip(), timeFlag)
+            logging.info('shangzhuo|上座记录|%s|%s|%s' % (message_id, srcName.strip(), timeFlag))
 
     def _showMsg(self, message):
 
@@ -848,6 +874,7 @@ class WebWeixin(object):
         self._run('[*] 进行同步线路测试 ... ', self.testsynccheck)
         playWeChat = 0
         redEnvelope = 0
+        friendGroup = 0
         while True:
             self.lastCheckTs = time.time()
             [retcode, selector] = self.synccheck()
@@ -862,6 +889,10 @@ class WebWeixin(object):
                 print '[*] 你在其他地方登录了 WEB 版微信，债见'
                 logging.debug('[*] 你在其他地方登录了 WEB 版微信，债见')
                 break
+            if retcode == '1102':
+                print '[*] 你手机上主动退出了，债见'
+                logging.debug('[*] 你在手机上主动退出了，债见')
+                break
             elif retcode == '0':
                 if selector == '2':
                     r = self.webwxsync()
@@ -872,6 +903,60 @@ class WebWeixin(object):
                     redEnvelope += 1
                     print '[*] 收到疑似红包消息 %d 次' % redEnvelope
                     logging.debug('[*] 收到疑似红包消息 %d 次' % redEnvelope)
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
+                elif selector == '4':
+                    friendGroup += 1
+                    print '[*] 收到朋友圈有动态 %d 次' % friendGroup
+                    logging.debug('[*] 收到朋友圈有动态 %d 次' % friendGroup)
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
+                elif selector == '7':
+                    playWeChat += 1
+                    print '[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat
+                    logging.debug('[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat)
+                    r = self.webwxsync()
+                elif selector == '0':
+                    time.sleep(1)
+                else: 
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
+            if (time.time() - self.lastCheckTs) <= 20:
+                time.sleep(time.time() - self.lastCheckTs)
+
+    def sendMsg(self, name, word, isfile=False):
+        id = self.getUSerID(name)
+        if id:
+            if isfile:
+                with open(word, 'r') as f:
+                    for line in f.readlines():
+                        line = line.replace('\n', '')
+                        self._echo('-> ' + name + ': ' + line)
+                        if self.webwxsendmsg(line, id):
+                            print ' [成功]'
+            elif retcode == '0':
+                if selector == '2':
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
+                elif selector == '6':
+                    # TODO
+                    redEnvelope += 1
+                    print '[*] 收到疑似红包消息 %d 次' % redEnvelope
+                    logging.debug('[*] 收到疑似红包消息 %d 次' % redEnvelope)
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
+                elif selector == '4':
+                    friendGroup += 1
+                    print '[*] 收到朋友圈有动态 %d 次' % friendGroup
+                    logging.debug('[*] 收到朋友圈有动态 %d 次' % friendGroup)
+                    r = self.webwxsync()
+                    if r is not None:
+                        self.handleMsg(r)
                 elif selector == '7':
                     playWeChat += 1
                     print '[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat
@@ -1137,7 +1222,7 @@ if sys.stdout.encoding == 'cp936':
 
 if __name__ == '__main__':
 
-    FORMAT = "%(asctime)s|%(message)s"
+    FORMAT = "%(asctime)s|%(lineno)d|%(message)s"
     logging.basicConfig(filename='./logger.log',format=FORMAT) 
     logger = logging.getLogger(__name__)
     import coloredlogs
