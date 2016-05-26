@@ -18,6 +18,7 @@ import logging
 from collections import defaultdict
 from urlparse import urlparse
 from lxml import html
+import sqlite3
 
 # for media upload
 import mimetypes
@@ -80,6 +81,8 @@ class WebWeixin(object):
 
     def __init__(self):
         self.DEBUG = False
+        self.dsn = 'robot.db'
+        self.conn = sqlite3.connect(self.dsn)
         self.uuid = ''
         self.base_uri = ''
         self.redirect_uri = ''
@@ -625,6 +628,42 @@ class WebWeixin(object):
                 return member['UserName']
         return None
 
+    def _getNickName(self, id):
+        name = '未知群' if id[:2] == '@@' else '陌生人'
+        if id == self.User['UserName']:
+            return self.User['NickName']  # 自己
+
+        if id[:2] == '@@':
+            # 群
+            name = self.getGroupName(id)
+        else:
+            # 特殊账号
+            for member in self.SpecialUsersList:
+                if member['UserName'] == id:
+                    name = member['NickName']
+
+            # 公众号或服务号
+            for member in self.PublicUsersList:
+                if member['UserName'] == id:
+                    name =  member['NickName']
+
+            # 直接联系人
+            for member in self.ContactList:
+                if member['UserName'] == id:
+                    name = member['NickName']
+                    print 'Name in Contact: remarkName = ' + member['RemarkName'] + ', NickName = '+member['NickName'] 
+                    logging.debug('Name in Contact: remarkName = ' + member['RemarkName'] + ', NickName = '+member['NickName']) 
+            # 群友
+            for member in self.GroupMemeberList:
+                if member['UserName'] == id:
+                    name = member['NickName']
+                    print 'Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName'] 
+                    logging.debug('Name in Group : DisplayName = ' + member['DisplayName'] + ', NickName = '+member['NickName']) 
+
+        if name == '未知群' or name == '陌生人':
+            logging.debug(id)
+        return name
+
     def _getUserNameInGroup(self, id):
         name = '未知群' if id[:2] == '@@' else '陌生人'
 
@@ -644,6 +683,31 @@ class WebWeixin(object):
             logging.debug(id)
         return name
 
+    def _getConnection(self):
+        try:
+            cursor = conn.coursor()
+            corsor.close()
+        except :
+            print 'reopen connection'
+            logging.debug('reopen connection')
+            self.conn = sqlite3.connect(self.dsn)
+        return self.conn
+    
+    def _saveSignIn(self,msgId,groupName,nickName,displayName,timeFlag):
+            msgId = unicode(msgId)
+            groupName = unicode(groupName)
+            nickName = unicode(nickName)
+            displayName = unicode(displayName)
+            timeFlag = unicode(timeFlag)
+    
+            conn = self._getConnection()
+            cursor = conn.cursor()
+            cursor.execute('insert into signin(msgId,groupName,nickName,displayName,timeFlag) values (?, ?, ?, ?, ?)',(msgId,groupName,nickName,displayName,timeFlag))
+            logging.debug('插入:'+str(cursor.rowcount)+'行')
+            cursor.close()
+            conn.commit()
+            conn.close()
+
     # 处理禅谷的群里面的表情签到消息
     def _processZenGroupMessage(self, message, name, url):
         oneHours = 'MGViabGqwnZfqvxoCaSgpMFTDNibiaKfQcZECJrCSiaAeWltVpnmCF2ic1g'
@@ -653,12 +717,13 @@ class WebWeixin(object):
         timeFlag = None
         needProcessGroupName = '水月禅谷同见同行群'
         # needProcessGroupName = '水月管理员工作群'
-        #  needProcessGroupName = '测试群'
+        # needProcessGroupName = '测试群'
  
         srcName = None
         dstName = None
         groupName = None
         content = None
+        nickName = None
 
         msg = message
         logging.debug(msg)
@@ -669,13 +734,16 @@ class WebWeixin(object):
             content = msg['raw_msg']['Content'].replace(
                 '&lt;', '<').replace('&gt;', '>')
             message_id = msg['raw_msg']['MsgId']
+            nickName = self._getNickName(msg['raw_msg']['FromUserName'])
+
             if msg['raw_msg']['FromUserName'][:2] == '@@':
 
                 # 接收到来自群的消息
                 if re.search(":<br/>", content, re.IGNORECASE):
-                    [people, content] = content.split(':<br/>')
+                    [people, content] = content.split(':<br/>',1)
                     groupName = srcName
                     srcName = self._getUserNameInGroup(people)
+                    nickName = self._getNickName(people)
                 else:
                     groupName = srcName
                     srcName = 'SYSTEM'
@@ -703,6 +771,7 @@ class WebWeixin(object):
         if timeFlag != None:
             print 'shangzhuo|上座记录|%s|%s|%s' % (message_id,  srcName.strip(), timeFlag)
             logging.info('shangzhuo|上座记录|%s|%s|%s' % (message_id, srcName.strip(), timeFlag))
+            self._saveSignIn(message_id,groupName,nickName,srcName.strip(),timeFlag)
 
     def _showMsg(self, message):
 
@@ -742,7 +811,7 @@ class WebWeixin(object):
             if msg['raw_msg']['FromUserName'][:2] == '@@':
                 # 接收到来自群的消息
                 if re.search(":<br/>", content, re.IGNORECASE):
-                    [people, content] = content.split(':<br/>')
+                    [people, content] = content.split(':<br/>',1)
                     groupName = srcName
                     srcName = self.getUserRemarkName(people)
                     dstName = 'GROUP'
@@ -1222,6 +1291,12 @@ if sys.stdout.encoding == 'cp936':
 
 if __name__ == '__main__':
 
+    # 解决sqlite3 编码问题 http://blog.csdn.net/matrix_laboratory/article/details/19163615
+    # http://stackoverflow.com/questions/26193218/python-sqlite3-programmingerror-you-must-not-use-8-bit-bytestrings-unless-you-u
+    # http://stackoverflow.com/questions/902408/how-to-use-variables-in-sql-statement-in-python
+    reload(sys)
+    sys.setdefaultencoding('utf8')
+    
     FORMAT = "%(asctime)s|%(lineno)d|%(message)s"
     logging.basicConfig(filename='./logger.log',format=FORMAT) 
     logger = logging.getLogger(__name__)
